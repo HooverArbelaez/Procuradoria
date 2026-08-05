@@ -16,21 +16,24 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+
+def fatal(message: str) -> int:
+    print(f"ERROR: {message}", file=sys.stderr)
+    return 1
+
 try:
     import fitz  # PyMuPDF
-except ImportError as exc:  # pragma: no cover
-    raise SystemExit(
-        "Falta PyMuPDF. Instálelo con: pip install pymupdf\n"
-        "Luego ejecute de nuevo este script."
-    ) from exc
+except ImportError:  # pragma: no cover
+    fitz = None  # type: ignore[assignment]
 
-CONVOCATORIA_RE = re.compile(r"CONVOCATORIA\s+No\.\s*([0-9]+\s*-\s*2026)", re.IGNORECASE)
+CONVOCATORIA_RE = re.compile(r"CONVOCATORIA\s+No\.?\s*([0-9]+\s*-\s*2026)", re.IGNORECASE)
 PAGINA_FICHA_RE = re.compile(r"P[aá]gina\s+(\d+)\s+de\s+(\d+)", re.IGNORECASE)
 SECTION_RE = re.compile(r"^\s*(\d+)\.\s+([A-ZÁÉÍÓÚÜÑ\s,]+)\s*$", re.MULTILINE)
 MONEY_RE = re.compile(r"\$\s*[0-9][0-9\.,]*")
@@ -40,6 +43,9 @@ GENERAL_BLOCK_TITLES = (
     "TABLA GENERAL DE PRUEBAS",
     "NOTAS GENERALES",
 )
+
+DEFAULT_PDF_PATH = Path(r"C:\Users\Hoover\Downloads\COMPILADO DE CONVOCATORIAS VR03_28042026 (1).pdf")
+DEFAULT_OUT_DIR = Path(r"C:\Users\Hoover\Downloads\Json")
 
 FIELD_ALIASES = {
     "denominacion": ("DENOMINACIÓN", "DENOMINACION"),
@@ -78,10 +84,44 @@ def norm(text: str) -> str:
 
 
 def ask_path(prompt: str) -> Path:
-    return Path(input(prompt).strip().strip('"').strip("'")).expanduser().resolve()
+    value = input(prompt).strip().strip('"').strip("'")
+    if not value:
+        raise ValueError("La ruta no puede estar vacía.")
+    return Path(value).expanduser().resolve()
+
+
+def resolve_default_pdf_path() -> Path | None:
+    env_value = os.environ.get("PROCURADURIA_PDF")
+    if env_value:
+        return Path(env_value).expanduser()
+    if os.name == "nt":
+        return DEFAULT_PDF_PATH
+    pdfs = sorted(Path.cwd().glob("*.pdf"))
+    return pdfs[0] if len(pdfs) == 1 else None
+
+
+def resolve_default_out_dir() -> Path:
+    env_value = os.environ.get("PROCURADURIA_OUT")
+    if env_value:
+        return Path(env_value).expanduser()
+    if os.name == "nt":
+        return DEFAULT_OUT_DIR
+    return Path.cwd()
+
+
+def default_pdf_path() -> Path | None:
+    """Compatibility wrapper for older PyCharm scratch copies of this script."""
+    return resolve_default_pdf_path()
+
+
+def default_out_dir() -> Path:
+    """Compatibility wrapper for older PyCharm scratch copies of this script."""
+    return resolve_default_out_dir()
 
 
 def extract_pages(pdf_path: Path) -> list[dict[str, Any]]:
+    if fitz is None:
+        raise RuntimeError("Falta PyMuPDF. Instálelo con: python -m pip install --upgrade pymupdf")
     doc = fitz.open(pdf_path)
     pages: list[dict[str, Any]] = []
     for idx, page in enumerate(doc, start=1):
@@ -97,7 +137,7 @@ def split_general_blocks(full_text: str) -> tuple[str, dict[str, str]]:
     for title in GENERAL_BLOCK_TITLES:
         pattern = re.compile(
             rf"(?is)({re.escape(title)}.*?)(?="
-            rf"{'|'.join(re.escape(t) for t in GENERAL_BLOCK_TITLES if t != title)}|CONVOCATORIA\s+No\.|\Z)"
+            rf"{'|'.join(re.escape(t) for t in GENERAL_BLOCK_TITLES if t != title)}|CONVOCATORIA\s+No\.?|\Z)"
         )
         matches = list(pattern.finditer(cleaned))
         if matches:
@@ -115,7 +155,10 @@ def split_empleos(pages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], li
         text = page["text"]
         conv = CONVOCATORIA_RE.search(text)
         ficha_page = PAGINA_FICHA_RE.search(text)
-        is_start = bool(conv and ficha_page and ficha_page.group(1) == "1")
+        # Algunas fichas del PDF no exponen el marcador "Página 1 de N" en el texto
+        # extraído, pero sí inician con "CONVOCATORIA No.". En esos casos también
+        # se debe partir una nueva ficha para no unir varios empleos en uno solo.
+        is_start = bool(conv and (not ficha_page or ficha_page.group(1) == "1"))
         if is_start:
             if current:
                 empleos.append(current)
@@ -123,7 +166,7 @@ def split_empleos(pages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], li
                 "numero_convocatoria": conv.group(1).replace(" ", ""),
                 "start_pdf_page": page["pdf_page"],
                 "end_pdf_page": page["pdf_page"],
-                "expected_pages": int(ficha_page.group(2)),
+                "expected_pages": int(ficha_page.group(2)) if ficha_page else None,
                 "pages": [page],
             }
         elif current:
@@ -253,11 +296,11 @@ def build_empleo(raw: dict[str, Any]) -> tuple[Empleo, list[ErrorExtraccion]]:
     ficha_markers = [PAGINA_FICHA_RE.search(p["text"]) for p in raw["pages"]]
     if not numero:
         errors.append(ErrorExtraccion(numero, raw["start_pdf_page"], "validacion", "La ficha no tiene número de convocatoria."))
-    if len(raw["pages"]) != raw["expected_pages"]:
+    if raw["expected_pages"] and len(raw["pages"]) != raw["expected_pages"]:
         errors.append(ErrorExtraccion(numero, raw["start_pdf_page"], "validacion", f"La ficha tiene {len(raw['pages'])} páginas detectadas, pero declara {raw['expected_pages']}."))
-    if not ficha_markers or not ficha_markers[0] or ficha_markers[0].group(1) != "1":
+    if raw["expected_pages"] and (not ficha_markers or not ficha_markers[0] or ficha_markers[0].group(1) != "1"):
         errors.append(ErrorExtraccion(numero, raw["start_pdf_page"], "validacion", "La ficha no inicia en Página 1 de N."))
-    if ficha_markers and ficha_markers[-1] and ficha_markers[-1].group(1) != ficha_markers[-1].group(2):
+    if raw["expected_pages"] and ficha_markers and ficha_markers[-1] and ficha_markers[-1].group(1) != ficha_markers[-1].group(2):
         errors.append(ErrorExtraccion(numero, raw["end_pdf_page"], "validacion", "La ficha no termina en Página N de N."))
     declared = int(identificacion["numero_cargos"]) if str(identificacion.get("numero_cargos", "")).isdigit() else None
     located = sum(x["cantidad_cargos"] for x in ubicacion["lugares_cantidad_cargos"])
@@ -301,18 +344,34 @@ def write_outputs(out_dir: Path, empleos: list[Empleo], general: dict[str, str],
 
 
 def main() -> int:
+    # Defensa para copias antiguas/editadas en PyCharm Scratch donde
+    # `default_pdf_path` o `default_out_dir` pudieron quedar como Path en vez de función.
+    global default_pdf_path, default_out_dir
+    if not callable(default_pdf_path):
+        default_pdf_path = resolve_default_pdf_path
+    if not callable(default_out_dir):
+        default_out_dir = resolve_default_out_dir
+
     parser = argparse.ArgumentParser(description="Convierte el PDF de convocatorias de Procuraduría en JSON estructurado.")
-    parser.add_argument("--pdf", type=Path, help="Path del PDF a leer.")
-    parser.add_argument("--out", type=Path, help="Carpeta donde se depositan los entregables.")
+    parser.add_argument("--pdf", type=Path, default=None, help="Path del PDF a leer. Por defecto usa PROCURADURIA_PDF, la ruta de Hoover en Windows o el único PDF en la carpeta actual.")
+    parser.add_argument("--out", type=Path, default=None, help="Carpeta donde se depositan los entregables. Por defecto usa PROCURADURIA_OUT, la carpeta Json de Hoover en Windows o la carpeta actual.")
     parser.add_argument("--limit", type=int, default=0, help="Procesa solo los primeros N empleos; útil para auditar la muestra inicial.")
     args = parser.parse_args()
 
-    pdf_path = (args.pdf or ask_path("Path del PDF a leer: ")).expanduser().resolve()
-    out_dir = (args.out or ask_path("Path de carpeta para depositar la respuesta: ")).expanduser().resolve()
+    try:
+        pdf_path = (args.pdf or resolve_default_pdf_path() or ask_path("Path del PDF a leer: ")).expanduser().resolve()
+        out_dir = (args.out or resolve_default_out_dir()).expanduser().resolve()
+    except (EOFError, KeyboardInterrupt, ValueError) as exc:
+        return fatal(str(exc) or "Ejecución cancelada.")
     if not pdf_path.exists():
-        raise SystemExit(f"No existe el PDF: {pdf_path}")
+        return fatal(f"No existe el PDF: {pdf_path}")
+    if not pdf_path.is_file():
+        return fatal(f"La ruta del PDF no es un archivo: {pdf_path}")
 
-    pages = extract_pages(pdf_path)
+    try:
+        pages = extract_pages(pdf_path)
+    except Exception as exc:
+        return fatal(str(exc))
     full_text = "\n\n".join(p["text"] for p in pages)
     _, general = split_general_blocks(full_text)
     raw_empleos, errors = split_empleos(pages)
@@ -325,7 +384,10 @@ def main() -> int:
         empleos.append(empleo)
         errors.extend(empleo_errors)
 
-    write_outputs(out_dir, empleos, general, errors)
+    try:
+        write_outputs(out_dir, empleos, general, errors)
+    except OSError as exc:
+        return fatal(f"No se pudieron escribir los entregables en {out_dir}: {exc}")
     print(f"OK: {len(empleos)} empleos procesados.")
     print(f"Entregables escritos en: {out_dir}")
     print("Archivos: procuraduria_empleos.json, procuraduria_empleos.jsonl, errores_extraccion.csv, muestra_auditoria_10_empleos.json")
