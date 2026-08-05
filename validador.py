@@ -27,7 +27,7 @@ REQUIRED_FILES = (
     "errores_extraccion.csv",
     "muestra_auditoria_10_empleos.json",
 )
-OUT_DIR_PREDETERMINADO: Path | None = None
+OUT_DIR_PREDETERMINADO = Path(r"C:\Users\Hoover\Downloads\Json")
 
 GENERAL_FORBIDDEN_IN_EMPLOYMENT = (
     "REGLAS DE INSCRIPCIÓN",
@@ -82,11 +82,18 @@ TRAZABILIDAD_FIELDS = (
 )
 
 
-def default_out_dir() -> Path:
+def resolve_default_out_dir() -> Path:
     env_value = os.environ.get("PROCURADURIA_OUT")
     if env_value:
         return Path(env_value).expanduser()
+    if os.name == "nt":
+        return OUT_DIR_PREDETERMINADO
     return Path.cwd()
+
+
+def default_out_dir() -> Path:
+    """Compatibility wrapper for older PyCharm scratch copies of this script."""
+    return resolve_default_out_dir()
 
 
 def load_json(path: Path) -> Any:
@@ -215,11 +222,11 @@ def main() -> int:
     parser.add_argument(
         "--out",
         type=Path,
-        default=OUT_DIR_PREDETERMINADO or default_out_dir(),
-        help="Carpeta con los cuatro entregables generados. Por defecto usa PROCURADURIA_OUT o la carpeta actual.",
+        default=None,
+        help="Carpeta con los cuatro entregables generados. Por defecto usa PROCURADURIA_OUT, la carpeta Json de Hoover en Windows o la carpeta actual.",
     )
     args = parser.parse_args()
-    out_dir = args.out.expanduser().resolve()
+    out_dir = (args.out or resolve_default_out_dir()).expanduser().resolve()
 
     errors: list[str] = []
     warnings: list[str] = []
