@@ -2,17 +2,14 @@
 """
 Extractor reproducible para convertir el PDF de convocatorias de la Procuraduría a JSON/JSONL.
 
-Uso con rutas incorporadas:
+Uso interactivo:
     python extractor_procuraduria.py
 
-Uso alternativo sobrescribiendo rutas por línea de comandos:
+Uso no interactivo:
     python extractor_procuraduria.py --pdf "COMPILADO DE CONVOCATORIAS VR03_28042026 (1).pdf" --out ./salida
 
 Dependencia recomendada:
     pip install pymupdf
-
-El script no pregunta paths por consola: usa PDF_PATH_PREDETERMINADO y
-OUT_DIR_PREDETERMINADO, o los valores recibidos por --pdf y --out.
 """
 from __future__ import annotations
 
@@ -25,51 +22,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-# ---------------------------------------------------------------------------
-# OPCIÓN FÁCIL PARA PC LOCAL:
-# Si quiere dejar rutas fijas, cámbielas aquí. Use r"..." en Windows.
-# Ejemplo Windows:
-# PDF_PATH_PREDETERMINADO = Path(r"C:\Users\SuUsuario\Downloads\COMPILADO DE CONVOCATORIAS VR03_28042026 (1).pdf")
-# OUT_DIR_PREDETERMINADO = Path(r"C:\Users\SuUsuario\Desktop\salida_procuraduria")
-#
-# El programa NO pregunta paths. Si alguna queda en None, mostrará un error claro.
-# ---------------------------------------------------------------------------
-PDF_PATH_PREDETERMINADO: Path | None = Path(
-    r"C:\Users\Hoover\Downloads\COMPILADO DE CONVOCATORIAS VR03_28042026 (1).pdf"
-)
-OUT_DIR_PREDETERMINADO: Path | None = Path(r"C:\Users\Hoover\Downloads\Json")
-
-def cargar_pymupdf():
-    """Carga PyMuPDF y evita el paquete incorrecto llamado `fitz`."""
-    try:
-        import pymupdf  # type: ignore[import-not-found]
-
-        return pymupdf
-    except ImportError:
-        pass
-
-    try:
-        import fitz as modulo_fitz  # type: ignore[import-not-found]  # PyMuPDF antes de exponer `pymupdf`
-    except Exception as exc:  # pragma: no cover
-        raise SystemExit(
-            "No se pudo cargar PyMuPDF. En Windows este error suele ocurrir cuando se instaló "
-            "el paquete equivocado `fitz` en lugar de `pymupdf`.\n\n"
-            "Ejecute estos comandos en la MISMA terminal/intérprete que usa PyCharm:\n"
-            "  python -m pip uninstall -y fitz frontend\n"
-            "  python -m pip install --upgrade pymupdf\n\n"
-            "Luego ejecute de nuevo este script."
-        ) from exc
-
-    if not hasattr(modulo_fitz, "open"):
-        raise SystemExit(
-            "Se importó un paquete `fitz` que no es PyMuPDF. Corríjalo con:\n"
-            "  python -m pip uninstall -y fitz frontend\n"
-            "  python -m pip install --upgrade pymupdf"
-        )
-    return modulo_fitz
-
-
-fitz = cargar_pymupdf()
+try:
+    import fitz  # PyMuPDF
+except ImportError as exc:  # pragma: no cover
+    raise SystemExit(
+        "Falta PyMuPDF. Instálelo con: pip install pymupdf\n"
+        "Luego ejecute de nuevo este script."
+    ) from exc
 
 CONVOCATORIA_RE = re.compile(r"CONVOCATORIA\s+No\.\s*([0-9]+\s*-\s*2026)", re.IGNORECASE)
 PAGINA_FICHA_RE = re.compile(r"P[aá]gina\s+(\d+)\s+de\s+(\d+)", re.IGNORECASE)
@@ -116,6 +75,10 @@ class Empleo:
 
 def norm(text: str) -> str:
     return re.sub(r"[ \t]+", " ", text.replace("\r", "")).strip()
+
+
+def ask_path(prompt: str) -> Path:
+    return Path(input(prompt).strip().strip('"').strip("'")).expanduser().resolve()
 
 
 def extract_pages(pdf_path: Path) -> list[dict[str, Any]]:
@@ -344,15 +307,8 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=0, help="Procesa solo los primeros N empleos; útil para auditar la muestra inicial.")
     args = parser.parse_args()
 
-    pdf_source = args.pdf or PDF_PATH_PREDETERMINADO
-    out_source = args.out or OUT_DIR_PREDETERMINADO
-    if pdf_source is None or out_source is None:
-        raise SystemExit(
-            "Configure PDF_PATH_PREDETERMINADO y OUT_DIR_PREDETERMINADO en el script, "
-            "o ejecute con --pdf y --out."
-        )
-    pdf_path = pdf_source.expanduser().resolve()
-    out_dir = out_source.expanduser().resolve()
+    pdf_path = (args.pdf or ask_path("Path del PDF a leer: ")).expanduser().resolve()
+    out_dir = (args.out or ask_path("Path de carpeta para depositar la respuesta: ")).expanduser().resolve()
     if not pdf_path.exists():
         raise SystemExit(f"No existe el PDF: {pdf_path}")
 
