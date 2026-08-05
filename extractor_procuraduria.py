@@ -90,25 +90,6 @@ def ask_path(prompt: str) -> Path:
     return Path(value).expanduser().resolve()
 
 
-def default_pdf_path() -> Path | None:
-    env_value = os.environ.get("PROCURADURIA_PDF")
-    if env_value:
-        return Path(env_value).expanduser()
-    if os.name == "nt":
-        return DEFAULT_PDF_PATH
-    pdfs = sorted(Path.cwd().glob("*.pdf"))
-    return pdfs[0] if len(pdfs) == 1 else None
-
-
-def default_out_dir() -> Path:
-    env_value = os.environ.get("PROCURADURIA_OUT")
-    if env_value:
-        return Path(env_value).expanduser()
-    if os.name == "nt":
-        return DEFAULT_OUT_DIR
-    return Path.cwd()
-
-
 def extract_pages(pdf_path: Path) -> list[dict[str, Any]]:
     if fitz is None:
         raise RuntimeError("Falta PyMuPDF. Instálelo con: python -m pip install --upgrade pymupdf")
@@ -342,7 +323,7 @@ def main() -> int:
 
     try:
         pdf_path = (args.pdf or ask_path("Path del PDF a leer: ")).expanduser().resolve()
-        out_dir = args.out.expanduser().resolve()
+        out_dir = (args.out or ask_path("Path de carpeta para depositar la respuesta: ")).expanduser().resolve()
     except (EOFError, KeyboardInterrupt, ValueError) as exc:
         return fatal(str(exc) or "Ejecución cancelada.")
     if not pdf_path.exists():
