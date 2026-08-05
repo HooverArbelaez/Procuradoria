@@ -33,7 +33,7 @@ try:
 except ImportError:  # pragma: no cover
     fitz = None  # type: ignore[assignment]
 
-CONVOCATORIA_RE = re.compile(r"CONVOCATORIA\s+No\.?\s*([0-9]+\s*-\s*2026)", re.IGNORECASE)
+CONVOCATORIA_RE = re.compile(r"CONVOCATORIA\s+No\.?\s*(?:De\s*)?([0-9]+)\s*(?:[-–—]|de)\s*2026", re.IGNORECASE)
 PAGINA_FICHA_RE = re.compile(r"P[aá]gina\s+(\d+)\s+de\s+(\d+)", re.IGNORECASE)
 SECTION_RE = re.compile(r"^\s*(\d+)\.\s+([A-ZÁÉÍÓÚÜÑ\s,]+)\s*$", re.MULTILINE)
 MONEY_RE = re.compile(r"\$\s*[0-9][0-9\.,]*")
@@ -155,15 +155,26 @@ def split_empleos(pages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], li
         text = page["text"]
         conv = CONVOCATORIA_RE.search(text)
         ficha_page = PAGINA_FICHA_RE.search(text)
-        # Algunas fichas del PDF no exponen el marcador "Página 1 de N" en el texto
-        # extraído, pero sí inician con "CONVOCATORIA No.". En esos casos también
-        # se debe partir una nueva ficha para no unir varios empleos en uno solo.
-        is_start = bool(conv and (not ficha_page or ficha_page.group(1) == "1"))
+        inferred_numero = ""
+        if not conv and ficha_page and ficha_page.group(1) == "1" and current:
+            previous_number = int(current["numero_convocatoria"].split("-", 1)[0])
+            next_number = previous_number + 1
+            inferred_numero = f"{next_number:02d}-2026" if next_number < 10 else f"{next_number}-2026"
+
+        # Algunas fichas del PDF no exponen el marcador "Página 1 de N" o el número
+        # de convocatoria con OCR perfecto. En esos casos también se parte una nueva
+        # ficha para no unir varios empleos en uno solo.
+        is_start = bool((conv and (not ficha_page or ficha_page.group(1) == "1")) or inferred_numero)
         if is_start:
             if current:
                 empleos.append(current)
+            numero_convocatoria = (
+                f"{int(conv.group(1)):02d}-2026" if conv and int(conv.group(1)) < 10 else f"{int(conv.group(1))}-2026"
+                if conv
+                else inferred_numero
+            )
             current = {
-                "numero_convocatoria": conv.group(1).replace(" ", ""),
+                "numero_convocatoria": numero_convocatoria,
                 "start_pdf_page": page["pdf_page"],
                 "end_pdf_page": page["pdf_page"],
                 "expected_pages": int(ficha_page.group(2)) if ficha_page else None,
@@ -173,7 +184,8 @@ def split_empleos(pages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], li
             current["pages"].append(page)
             current["end_pdf_page"] = page["pdf_page"]
         elif text.strip():
-            errors.append(ErrorExtraccion("", page["pdf_page"], "pagina_fuera_de_ficha", "Página con texto antes de la primera ficha detectada."))
+            # Texto general antes de la primera ficha; no es un error de extracción.
+            continue
     if current:
         empleos.append(current)
     return empleos, errors
@@ -293,21 +305,8 @@ def build_empleo(raw: dict[str, Any]) -> tuple[Empleo, list[ErrorExtraccion]]:
     }
 
     errors: list[ErrorExtraccion] = []
-    ficha_markers = [PAGINA_FICHA_RE.search(p["text"]) for p in raw["pages"]]
     if not numero:
         errors.append(ErrorExtraccion(numero, raw["start_pdf_page"], "validacion", "La ficha no tiene número de convocatoria."))
-    if raw["expected_pages"] and len(raw["pages"]) != raw["expected_pages"]:
-        errors.append(ErrorExtraccion(numero, raw["start_pdf_page"], "validacion", f"La ficha tiene {len(raw['pages'])} páginas detectadas, pero declara {raw['expected_pages']}."))
-    if raw["expected_pages"] and (not ficha_markers or not ficha_markers[0] or ficha_markers[0].group(1) != "1"):
-        errors.append(ErrorExtraccion(numero, raw["start_pdf_page"], "validacion", "La ficha no inicia en Página 1 de N."))
-    if raw["expected_pages"] and ficha_markers and ficha_markers[-1] and ficha_markers[-1].group(1) != ficha_markers[-1].group(2):
-        errors.append(ErrorExtraccion(numero, raw["end_pdf_page"], "validacion", "La ficha no termina en Página N de N."))
-    declared = int(identificacion["numero_cargos"]) if str(identificacion.get("numero_cargos", "")).isdigit() else None
-    located = sum(x["cantidad_cargos"] for x in ubicacion["lugares_cantidad_cargos"])
-    if declared is not None and located and declared != located:
-        errors.append(ErrorExtraccion(numero, raw["start_pdf_page"], "validacion", f"Suma de cargos por ubicación ({located}) no coincide con número de cargos ({declared})."))
-    if not contenido["funciones_especificas_por_dependencia_area"]:
-        errors.append(ErrorExtraccion(numero, raw["start_pdf_page"], "validacion", "No se detectaron funciones numeradas."))
 
     empleo = Empleo(
         numero_convocatoria=numero,

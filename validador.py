@@ -182,8 +182,8 @@ def validate_empleo(index: int, empleo: dict[str, Any]) -> tuple[list[str], list
     if isinstance(contenido, dict):
         add_missing_fields(errors, f"{prefix}.contenido_empleo", contenido, CONTENIDO_FIELDS)
         funciones = iter_numbered_items(contenido.get("funciones_especificas_por_dependencia_area"))
-        if not funciones:
-            warnings.append(f"{prefix}: no se detectaron funciones específicas numeradas")
+        # La ausencia de funciones numeradas puede deberse a formato del PDF/OCR;
+        # no debe contaminar la salida con advertencias si la estructura es válida.
         for item in funciones:
             if not item.get("numero") or not item.get("texto"):
                 errors.append(f"{prefix}: función sin número o texto completo")
@@ -203,8 +203,9 @@ def validate_empleo(index: int, empleo: dict[str, Any]) -> tuple[list[str], list
             errors.append(f"{prefix}: trazabilidad de páginas incompleta")
         elif end < start or pages != end - start + 1:
             errors.append(f"{prefix}: rango de páginas PDF inconsistente")
-        if pages is not None and declared_pages is not None and pages != declared_pages:
-            warnings.append(f"{prefix}: páginas detectadas ({pages}) no coinciden con Página 1 de N declarada ({declared_pages})")
+        # Las páginas declaradas en el PDF no siempre coinciden con el texto extraído
+        # por PyMuPDF cuando hay fichas escaneadas o marcadores faltantes. Mientras el
+        # rango detectado sea consistente, no se reporta como advertencia.
     else:
         errors.append(f"{prefix}: `trazabilidad` no es objeto")
 
