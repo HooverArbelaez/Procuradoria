@@ -2,10 +2,7 @@
 """
 Validador de entregables generados por extractor_procuraduria.py.
 
-Uso con ruta incorporada:
-    python validar_entregables_procuraduria.py
-
-Uso alternativo sobrescribiendo la ruta de salida:
+Uso:
     python validar_entregables_procuraduria.py --out ./salida
 
 Valida la estructura y reglas comprobables sin volver a leer el PDF original.
@@ -27,8 +24,6 @@ REQUIRED_FILES = (
     "errores_extraccion.csv",
     "muestra_auditoria_10_empleos.json",
 )
-OUT_DIR_PREDETERMINADO: Path | None = Path(r"C:\Users\Hoover\Downloads\Json")
-
 GENERAL_FORBIDDEN_IN_EMPLOYMENT = (
     "REGLAS DE INSCRIPCIÓN",
     "RECLAMACIONES",
@@ -205,15 +200,8 @@ def validate_empleo(index: int, empleo: dict[str, Any]) -> tuple[list[str], list
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Valida entregables del extractor de Procuraduría.")
-    parser.add_argument(
-        "--out",
-        type=Path,
-        default=OUT_DIR_PREDETERMINADO,
-        help=r"Carpeta con los cuatro entregables generados. Por defecto usa C:\\Users\\Hoover\\Downloads\\Json.",
-    )
+    parser.add_argument("--out", type=Path, required=True, help="Carpeta con los cuatro entregables generados.")
     args = parser.parse_args()
-    if args.out is None:
-        raise SystemExit("Configure OUT_DIR_PREDETERMINADO o ejecute con --out.")
     out_dir = args.out.expanduser().resolve()
 
     errors: list[str] = []
