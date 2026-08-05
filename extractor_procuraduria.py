@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 import sys
 from dataclasses import asdict, dataclass
@@ -32,7 +33,7 @@ try:
 except ImportError:  # pragma: no cover
     fitz = None  # type: ignore[assignment]
 
-CONVOCATORIA_RE = re.compile(r"CONVOCATORIA\s+No\.\s*([0-9]+\s*-\s*2026)", re.IGNORECASE)
+CONVOCATORIA_RE = re.compile(r"CONVOCATORIA\s+No\.?\s*([0-9]+\s*-\s*2026)", re.IGNORECASE)
 PAGINA_FICHA_RE = re.compile(r"P[aá]gina\s+(\d+)\s+de\s+(\d+)", re.IGNORECASE)
 SECTION_RE = re.compile(r"^\s*(\d+)\.\s+([A-ZÁÉÍÓÚÜÑ\s,]+)\s*$", re.MULTILINE)
 MONEY_RE = re.compile(r"\$\s*[0-9][0-9\.,]*")
@@ -42,6 +43,9 @@ GENERAL_BLOCK_TITLES = (
     "TABLA GENERAL DE PRUEBAS",
     "NOTAS GENERALES",
 )
+
+DEFAULT_PDF_PATH = Path(r"C:\Users\Hoover\Downloads\COMPILADO DE CONVOCATORIAS VR03_28042026 (1).pdf")
+DEFAULT_OUT_DIR = Path(r"C:\Users\Hoover\Downloads\Json")
 
 FIELD_ALIASES = {
     "denominacion": ("DENOMINACIÓN", "DENOMINACION"),
@@ -122,7 +126,10 @@ def split_empleos(pages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], li
         text = page["text"]
         conv = CONVOCATORIA_RE.search(text)
         ficha_page = PAGINA_FICHA_RE.search(text)
-        is_start = bool(conv and ficha_page and ficha_page.group(1) == "1")
+        # Algunas fichas del PDF no exponen el marcador "Página 1 de N" en el texto
+        # extraído, pero sí inician con "CONVOCATORIA No.". En esos casos también
+        # se debe partir una nueva ficha para no unir varios empleos en uno solo.
+        is_start = bool(conv and (not ficha_page or ficha_page.group(1) == "1"))
         if is_start:
             if current:
                 empleos.append(current)
@@ -130,7 +137,7 @@ def split_empleos(pages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], li
                 "numero_convocatoria": conv.group(1).replace(" ", ""),
                 "start_pdf_page": page["pdf_page"],
                 "end_pdf_page": page["pdf_page"],
-                "expected_pages": int(ficha_page.group(2)),
+                "expected_pages": int(ficha_page.group(2)) if ficha_page else None,
                 "pages": [page],
             }
         elif current:
@@ -260,11 +267,11 @@ def build_empleo(raw: dict[str, Any]) -> tuple[Empleo, list[ErrorExtraccion]]:
     ficha_markers = [PAGINA_FICHA_RE.search(p["text"]) for p in raw["pages"]]
     if not numero:
         errors.append(ErrorExtraccion(numero, raw["start_pdf_page"], "validacion", "La ficha no tiene número de convocatoria."))
-    if len(raw["pages"]) != raw["expected_pages"]:
+    if raw["expected_pages"] and len(raw["pages"]) != raw["expected_pages"]:
         errors.append(ErrorExtraccion(numero, raw["start_pdf_page"], "validacion", f"La ficha tiene {len(raw['pages'])} páginas detectadas, pero declara {raw['expected_pages']}."))
-    if not ficha_markers or not ficha_markers[0] or ficha_markers[0].group(1) != "1":
+    if raw["expected_pages"] and (not ficha_markers or not ficha_markers[0] or ficha_markers[0].group(1) != "1"):
         errors.append(ErrorExtraccion(numero, raw["start_pdf_page"], "validacion", "La ficha no inicia en Página 1 de N."))
-    if ficha_markers and ficha_markers[-1] and ficha_markers[-1].group(1) != ficha_markers[-1].group(2):
+    if raw["expected_pages"] and ficha_markers and ficha_markers[-1] and ficha_markers[-1].group(1) != ficha_markers[-1].group(2):
         errors.append(ErrorExtraccion(numero, raw["end_pdf_page"], "validacion", "La ficha no termina en Página N de N."))
     declared = int(identificacion["numero_cargos"]) if str(identificacion.get("numero_cargos", "")).isdigit() else None
     located = sum(x["cantidad_cargos"] for x in ubicacion["lugares_cantidad_cargos"])
@@ -309,8 +316,8 @@ def write_outputs(out_dir: Path, empleos: list[Empleo], general: dict[str, str],
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Convierte el PDF de convocatorias de Procuraduría en JSON estructurado.")
-    parser.add_argument("--pdf", type=Path, help="Path del PDF a leer.")
-    parser.add_argument("--out", type=Path, help="Carpeta donde se depositan los entregables.")
+    parser.add_argument("--pdf", type=Path, default=default_pdf_path(), help="Path del PDF a leer. Por defecto usa PROCURADURIA_PDF, la ruta de Hoover en Windows o el único PDF en la carpeta actual.")
+    parser.add_argument("--out", type=Path, default=default_out_dir(), help="Carpeta donde se depositan los entregables. Por defecto usa PROCURADURIA_OUT, la carpeta Json de Hoover en Windows o la carpeta actual.")
     parser.add_argument("--limit", type=int, default=0, help="Procesa solo los primeros N empleos; útil para auditar la muestra inicial.")
     args = parser.parse_args()
 
