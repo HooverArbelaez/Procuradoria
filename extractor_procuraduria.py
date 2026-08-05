@@ -108,7 +108,7 @@ def split_general_blocks(full_text: str) -> tuple[str, dict[str, str]]:
     for title in GENERAL_BLOCK_TITLES:
         pattern = re.compile(
             rf"(?is)({re.escape(title)}.*?)(?="
-            rf"{'|'.join(re.escape(t) for t in GENERAL_BLOCK_TITLES if t != title)}|CONVOCATORIA\s+No\.|\Z)"
+            rf"{'|'.join(re.escape(t) for t in GENERAL_BLOCK_TITLES if t != title)}|CONVOCATORIA\s+No\.?|\Z)"
         )
         matches = list(pattern.finditer(cleaned))
         if matches:
