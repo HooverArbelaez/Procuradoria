@@ -18,7 +18,6 @@ import csv
 import json
 import os
 import re
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -309,4 +308,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
