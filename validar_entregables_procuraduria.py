@@ -13,8 +13,8 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +75,13 @@ TRAZABILIDAD_FIELDS = (
     "paginas_ficha_declaradas",
     "alertas_errores_extraccion",
 )
+
+
+def default_out_dir() -> Path:
+    env_value = os.environ.get("PROCURADURIA_OUT")
+    if env_value:
+        return Path(env_value).expanduser()
+    return Path.cwd()
 
 
 def load_json(path: Path) -> Any:
@@ -200,7 +207,7 @@ def validate_empleo(index: int, empleo: dict[str, Any]) -> tuple[list[str], list
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Valida entregables del extractor de Procuraduría.")
-    parser.add_argument("--out", type=Path, required=True, help="Carpeta con los cuatro entregables generados.")
+    parser.add_argument("--out", type=Path, default=default_out_dir(), help="Carpeta con los cuatro entregables generados. Por defecto usa PROCURADURIA_OUT o la carpeta actual.")
     args = parser.parse_args()
     out_dir = args.out.expanduser().resolve()
 
@@ -217,12 +224,18 @@ def main() -> int:
         print("\n".join(f"- {e}" for e in errors))
         return 1
 
-    payload = load_json(out_dir / "procuraduria_empleos.json")
-    jsonl_rows = load_jsonl(out_dir / "procuraduria_empleos.jsonl")
-    sample_rows = load_json(out_dir / "muestra_auditoria_10_empleos.json")
-    with (out_dir / "errores_extraccion.csv").open(encoding="utf-8", newline="") as fh:
-        csv_rows = list(csv.DictReader(fh))
-        csv_headers = fh.seek(0) or next(csv.reader(fh))
+    try:
+        payload = load_json(out_dir / "procuraduria_empleos.json")
+        jsonl_rows = load_jsonl(out_dir / "procuraduria_empleos.jsonl")
+        sample_rows = load_json(out_dir / "muestra_auditoria_10_empleos.json")
+        with (out_dir / "errores_extraccion.csv").open(encoding="utf-8", newline="") as fh:
+            reader = csv.DictReader(fh)
+            csv_rows = list(reader)
+            csv_headers = reader.fieldnames or []
+    except (OSError, json.JSONDecodeError, ValueError, csv.Error) as exc:
+        print("ERRORES CRÍTICOS")
+        print(f"- No se pudieron leer los entregables: {exc}")
+        return 1
 
     if not isinstance(payload, dict):
         errors.append("procuraduria_empleos.json debe ser un objeto raíz")
