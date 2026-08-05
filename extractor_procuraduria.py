@@ -90,25 +90,6 @@ def ask_path(prompt: str) -> Path:
     return Path(value).expanduser().resolve()
 
 
-def resolve_default_pdf_path() -> Path | None:
-    env_value = os.environ.get("PROCURADURIA_PDF")
-    if env_value:
-        return Path(env_value).expanduser()
-    if os.name == "nt":
-        return DEFAULT_PDF_PATH
-    pdfs = sorted(Path.cwd().glob("*.pdf"))
-    return pdfs[0] if len(pdfs) == 1 else None
-
-
-def resolve_default_out_dir() -> Path:
-    env_value = os.environ.get("PROCURADURIA_OUT")
-    if env_value:
-        return Path(env_value).expanduser()
-    if os.name == "nt":
-        return DEFAULT_OUT_DIR
-    return Path.cwd()
-
-
 def extract_pages(pdf_path: Path) -> list[dict[str, Any]]:
     if fitz is None:
         raise RuntimeError("Falta PyMuPDF. Instálelo con: python -m pip install --upgrade pymupdf")
@@ -335,14 +316,14 @@ def write_outputs(out_dir: Path, empleos: list[Empleo], general: dict[str, str],
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Convierte el PDF de convocatorias de Procuraduría en JSON estructurado.")
-    parser.add_argument("--pdf", type=Path, default=None, help="Path del PDF a leer. Por defecto usa PROCURADURIA_PDF, la ruta de Hoover en Windows o el único PDF en la carpeta actual.")
-    parser.add_argument("--out", type=Path, default=None, help="Carpeta donde se depositan los entregables. Por defecto usa PROCURADURIA_OUT, la carpeta Json de Hoover en Windows o la carpeta actual.")
+    parser.add_argument("--pdf", type=Path, default=default_pdf_path(), help="Path del PDF a leer. Por defecto usa PROCURADURIA_PDF, la ruta de Hoover en Windows o el único PDF en la carpeta actual.")
+    parser.add_argument("--out", type=Path, default=default_out_dir(), help="Carpeta donde se depositan los entregables. Por defecto usa PROCURADURIA_OUT, la carpeta Json de Hoover en Windows o la carpeta actual.")
     parser.add_argument("--limit", type=int, default=0, help="Procesa solo los primeros N empleos; útil para auditar la muestra inicial.")
     args = parser.parse_args()
 
     try:
-        pdf_path = (args.pdf or resolve_default_pdf_path() or ask_path("Path del PDF a leer: ")).expanduser().resolve()
-        out_dir = (args.out or resolve_default_out_dir()).expanduser().resolve()
+        pdf_path = (args.pdf or ask_path("Path del PDF a leer: ")).expanduser().resolve()
+        out_dir = (args.out or ask_path("Path de carpeta para depositar la respuesta: ")).expanduser().resolve()
     except (EOFError, KeyboardInterrupt, ValueError) as exc:
         return fatal(str(exc) or "Ejecución cancelada.")
     if not pdf_path.exists():
