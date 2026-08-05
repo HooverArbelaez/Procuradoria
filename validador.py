@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -27,7 +28,7 @@ REQUIRED_FILES = (
     "errores_extraccion.csv",
     "muestra_auditoria_10_empleos.json",
 )
-OUT_DIR_PREDETERMINADO: Path | None = Path(r"C:\Users\Hoover\Downloads\Json")
+OUT_DIR_PREDETERMINADO: Path | None = None
 
 GENERAL_FORBIDDEN_IN_EMPLOYMENT = (
     "REGLAS DE INSCRIPCIÓN",
@@ -80,6 +81,13 @@ TRAZABILIDAD_FIELDS = (
     "paginas_ficha_declaradas",
     "alertas_errores_extraccion",
 )
+
+
+def default_out_dir() -> Path:
+    env_value = os.environ.get("PROCURADURIA_OUT")
+    if env_value:
+        return Path(env_value).expanduser()
+    return Path.cwd()
 
 
 def load_json(path: Path) -> Any:
@@ -208,12 +216,10 @@ def main() -> int:
     parser.add_argument(
         "--out",
         type=Path,
-        default=OUT_DIR_PREDETERMINADO,
-        help=r"Carpeta con los cuatro entregables generados. Por defecto usa C:\\Users\\Hoover\\Downloads\\Json.",
+        default=OUT_DIR_PREDETERMINADO or default_out_dir(),
+        help="Carpeta con los cuatro entregables generados. Por defecto usa PROCURADURIA_OUT o la carpeta actual.",
     )
     args = parser.parse_args()
-    if args.out is None:
-        raise SystemExit("Configure OUT_DIR_PREDETERMINADO o ejecute con --out.")
     out_dir = args.out.expanduser().resolve()
 
     errors: list[str] = []
@@ -229,12 +235,18 @@ def main() -> int:
         print("\n".join(f"- {e}" for e in errors))
         return 1
 
-    payload = load_json(out_dir / "procuraduria_empleos.json")
-    jsonl_rows = load_jsonl(out_dir / "procuraduria_empleos.jsonl")
-    sample_rows = load_json(out_dir / "muestra_auditoria_10_empleos.json")
-    with (out_dir / "errores_extraccion.csv").open(encoding="utf-8", newline="") as fh:
-        csv_rows = list(csv.DictReader(fh))
-        csv_headers = fh.seek(0) or next(csv.reader(fh))
+    try:
+        payload = load_json(out_dir / "procuraduria_empleos.json")
+        jsonl_rows = load_jsonl(out_dir / "procuraduria_empleos.jsonl")
+        sample_rows = load_json(out_dir / "muestra_auditoria_10_empleos.json")
+        with (out_dir / "errores_extraccion.csv").open(encoding="utf-8", newline="") as fh:
+            reader = csv.DictReader(fh)
+            csv_rows = list(reader)
+            csv_headers = reader.fieldnames or []
+    except (OSError, json.JSONDecodeError, ValueError, csv.Error) as exc:
+        print("ERRORES CRÍTICOS")
+        print(f"- No se pudieron leer los entregables: {exc}")
+        return 1
 
     if not isinstance(payload, dict):
         errors.append("procuraduria_empleos.json debe ser un objeto raíz")

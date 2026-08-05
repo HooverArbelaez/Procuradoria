@@ -22,13 +22,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+
+def fatal(message: str) -> int:
+    print(f"ERROR: {message}", file=sys.stderr)
+    return 1
+
 try:
     import fitz  # PyMuPDF
-except ImportError as exc:  # pragma: no cover
-    raise SystemExit(
-        "Falta PyMuPDF. Instálelo con: pip install pymupdf\n"
-        "Luego ejecute de nuevo este script."
-    ) from exc
+except ImportError:  # pragma: no cover
+    fitz = None  # type: ignore[assignment]
 
 CONVOCATORIA_RE = re.compile(r"CONVOCATORIA\s+No\.\s*([0-9]+\s*-\s*2026)", re.IGNORECASE)
 PAGINA_FICHA_RE = re.compile(r"P[aá]gina\s+(\d+)\s+de\s+(\d+)", re.IGNORECASE)
@@ -78,10 +80,15 @@ def norm(text: str) -> str:
 
 
 def ask_path(prompt: str) -> Path:
-    return Path(input(prompt).strip().strip('"').strip("'")).expanduser().resolve()
+    value = input(prompt).strip().strip('"').strip("'")
+    if not value:
+        raise ValueError("La ruta no puede estar vacía.")
+    return Path(value).expanduser().resolve()
 
 
 def extract_pages(pdf_path: Path) -> list[dict[str, Any]]:
+    if fitz is None:
+        raise RuntimeError("Falta PyMuPDF. Instálelo con: python -m pip install --upgrade pymupdf")
     doc = fitz.open(pdf_path)
     pages: list[dict[str, Any]] = []
     for idx, page in enumerate(doc, start=1):
@@ -307,12 +314,20 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=0, help="Procesa solo los primeros N empleos; útil para auditar la muestra inicial.")
     args = parser.parse_args()
 
-    pdf_path = (args.pdf or ask_path("Path del PDF a leer: ")).expanduser().resolve()
-    out_dir = (args.out or ask_path("Path de carpeta para depositar la respuesta: ")).expanduser().resolve()
+    try:
+        pdf_path = (args.pdf or ask_path("Path del PDF a leer: ")).expanduser().resolve()
+        out_dir = (args.out or ask_path("Path de carpeta para depositar la respuesta: ")).expanduser().resolve()
+    except (EOFError, KeyboardInterrupt, ValueError) as exc:
+        return fatal(str(exc) or "Ejecución cancelada.")
     if not pdf_path.exists():
-        raise SystemExit(f"No existe el PDF: {pdf_path}")
+        return fatal(f"No existe el PDF: {pdf_path}")
+    if not pdf_path.is_file():
+        return fatal(f"La ruta del PDF no es un archivo: {pdf_path}")
 
-    pages = extract_pages(pdf_path)
+    try:
+        pages = extract_pages(pdf_path)
+    except Exception as exc:
+        return fatal(str(exc))
     full_text = "\n\n".join(p["text"] for p in pages)
     _, general = split_general_blocks(full_text)
     raw_empleos, errors = split_empleos(pages)
@@ -325,7 +340,10 @@ def main() -> int:
         empleos.append(empleo)
         errors.extend(empleo_errors)
 
-    write_outputs(out_dir, empleos, general, errors)
+    try:
+        write_outputs(out_dir, empleos, general, errors)
+    except OSError as exc:
+        return fatal(f"No se pudieron escribir los entregables en {out_dir}: {exc}")
     print(f"OK: {len(empleos)} empleos procesados.")
     print(f"Entregables escritos en: {out_dir}")
     print("Archivos: procuraduria_empleos.json, procuraduria_empleos.jsonl, errores_extraccion.csv, muestra_auditoria_10_empleos.json")
